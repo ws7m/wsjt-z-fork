@@ -1727,6 +1727,7 @@ void MainWindow::writeSettings()
   m_settings->setValue ("filter_CQDX_Continent", ui->cb_filter_CQDX_Continent->currentIndex());
   m_settings->setValue ("AutoIgnore", ui->cb_IgnoreAfterWD->isChecked());
   m_settings->setValue ("filter_LOTW", ui->cb_f_LOTW->isChecked());
+  m_settings->setValue ("filter_POTA", ui->cb_f_POTA->isChecked());
   m_settings->setValue ("CQonlyIncl73", ui->cbCQonlyIncl73->isChecked());
   m_settings->setValue ("dockWaterfall", ui->cbDockWF->isChecked());
   m_settings->setValue ("showCallInfo", ui->actionCall_info->isChecked());
@@ -1976,6 +1977,7 @@ void MainWindow::readSettings()
   ui->cb_c_SA->setChecked(m_settings->value("filter_c_SA", true).toBool());
   ui->cb_c_OC->setChecked(m_settings->value("filter_c_OC", true).toBool());
   ui->cb_f_LOTW->setChecked(m_settings->value("filter_LOTW", false).toBool());
+  ui->cb_f_POTA->setChecked(m_settings->value("filter_POTA", false).toBool());
   ui->cb_filter_CQDX_Continent->setCurrentIndex(m_settings->value("filter_CQDX_Continent", 0).toInt());
   ui->le_ignoreCQXX->setText(m_settings->value("ignoreCQXX").toString());
   ui->le_CustomAlerts->setText(m_settings->value("customAlerts").toString());
@@ -14326,6 +14328,23 @@ bool MainWindow::callsignFiltered(DecodedText dt)
         return true;
     }
 
+    // POTA only filter: keep only CQs whose CQ part contains POTA,
+    // e.g. "CQ POTA W1ABC FN42".  For standard messages messageWords()[2]
+    // is the whole CQ part ("CQ POTA"); for free-text messages the words
+    // are split, so "CQ" and "POTA" arrive as [2] and [3].
+    if (ui->cb_f_POTA->isChecked()) {
+        QString cqPart;
+        if (message_words.size() > 2 && message_words[2].startsWith("CQ")) {
+            cqPart = message_words[2];
+            if (cqPart == "CQ" && message_words.size() > 3) cqPart += " " + message_words[3];
+        }
+        if (m_zdebug) log("callsignFiltered: POTA check, CQ part='" + cqPart + "'");
+        if (!cqPart.split(' ', SkipEmptyParts).contains("POTA")) {
+            if (m_zdebug) log("callsignFiltered: CQ part does not contain POTA");
+            return true;
+        }
+    }
+
     // Ignored stations filter
     if (m_ignoredStationsCache.contains(dxCall)) {
         if (m_zdebug) log("callsignFiltered: Station is in the ignore list");
@@ -14348,14 +14367,32 @@ bool MainWindow::callsignFiltered(DecodedText dt)
     // Continent filter
     auto const& looked_up = m_logBook.countries ()->lookup (dxCall);
     QString continent = AD1CCty::continent (looked_up.continent);
-    if (m_zdebug) log("callsignFiltered: Continent filtering...");
-    if (continent == "EU" && !ui->cb_c_EU->isChecked()) return true;
-    else if (continent == "AF" && !ui->cb_c_AF->isChecked()) return true;
-    else if (continent == "AN" && !ui->cb_c_AN->isChecked()) return true;
-    else if (continent == "AS" && !ui->cb_c_AS->isChecked()) return true;
-    else if (continent == "NA" && !ui->cb_c_NA->isChecked()) return true;
-    else if (continent == "SA" && !ui->cb_c_SA->isChecked()) return true;
-    else if (continent == "OC" && !ui->cb_c_OC->isChecked()) return true;
+    // Only apply the continent filter when at least one continent box is
+    // checked; with none checked, continent filtering is skipped entirely.
+    // Exception: pileup mode deliberately unchecks every continent to hide
+    // all decodes not addressed to us, so keep filtering in that case.
+    bool const anyContinentChecked =
+        ui->cb_c_EU->isChecked() || ui->cb_c_AF->isChecked() ||
+        ui->cb_c_AN->isChecked() || ui->cb_c_AS->isChecked() ||
+        ui->cb_c_NA->isChecked() || ui->cb_c_SA->isChecked() ||
+        ui->cb_c_OC->isChecked();
+    if (anyContinentChecked || m_config.pileupMode()) {
+        if (m_zdebug) log("callsignFiltered: Continent filtering (" + continent + ")...");
+        bool continentRejected =
+               (continent == "EU" && !ui->cb_c_EU->isChecked())
+            || (continent == "AF" && !ui->cb_c_AF->isChecked())
+            || (continent == "AN" && !ui->cb_c_AN->isChecked())
+            || (continent == "AS" && !ui->cb_c_AS->isChecked())
+            || (continent == "NA" && !ui->cb_c_NA->isChecked())
+            || (continent == "SA" && !ui->cb_c_SA->isChecked())
+            || (continent == "OC" && !ui->cb_c_OC->isChecked());
+        if (continentRejected) {
+            if (m_zdebug) log("callsignFiltered: Continent " + continent + " not checked. Skipping.");
+            return true;
+        }
+    } else {
+        if (m_zdebug) log("callsignFiltered: No continents checked - continent filter skipped");
+    }
 
     if (m_zdebug) log("callsignFiltered: CQ Target filtering...");
 
